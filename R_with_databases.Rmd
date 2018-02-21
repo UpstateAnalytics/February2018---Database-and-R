@@ -1,0 +1,159 @@
+---
+title: "How R Can Work with Databases!"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+## SQL to R Basics  
+* There are multiple packages supporting connectivity between R and database management systems (**DBMS**)  
+* Popular DBMS's include **SQL Server, SQLite, MySQL and Oracle**  
+* R package **DBI** manages separate front-end and back-end interfaces between R and the DBMS. Applications use the front-end interface commands, while DBMS-specific tasks are handled by back-end drivers like RSQLite and RMySQL.  
+* **dbplyr** is a package that helps dplyr work with SQL tables through a DBI connection  
+```{r, warning=FALSE, message=FALSE}
+library(DBI)
+library(dplyr)
+library(dbplyr)
+library(wordcloud2)
+```
+
+## Let's explore some data!!
+
+* Kaggle data set drawn from the Meetups.com API   
+* https://www.kaggle.com/sirpunch/meetups-data-from-meetupcom/version/1  
+* Contains data on Meetup members, groups, venues, topics and events from three cities: New York, San Francisco and Chicago  
+* Data uses almost 1.5 GB on disk - not convenient to load into R memory  
+* Stored locally in a MySQL database called mydb
+
+## Create the database connection  
+Check results in Connections pane
+```{r, warning=FALSE, message=FALSE}
+# "dbcon" connection configured in /etc/odbc.ini
+con <- dbConnect(odbc::odbc(), "dbcon")
+
+```
+
+```{r}
+# alternative to using ODBC configuration file: specify connection string
+con2 <- dbConnect(odbc::odbc(), .connection_string="Driver={MySQL}; Uid=rebecca; Pwd=dbpass; Host=localhost; Port=3306; Database=mydb; Socket=/var/run/mysqld/mysqld.sock;")
+
+```
+
+### List the tables in the SQL database
+```{r}
+mydb.tables <- dbListTables(con)
+
+mydb.tables
+```
+
+### Get the number of rows in each table
+```{r}
+
+for(table in mydb.tables){
+  query <- paste0("Select count(*) from ", table)
+  rows <- tbl(con, sql(query)) %>% collect()
+  print(paste0(table, ": ", rows[[1]], " rows"))
+}
+
+```
+
+
+### Get column names of the 'members' table
+```{r}
+
+dbListFields(con, "members")
+dbListFields(con, "groups")
+
+```
+
+### Run 'SELECT' query and save the results as a data frame  
+```{r}
+venue.df <- dbGetQuery(con, "SELECT DISTINCT venue_name, city from venues;")
+topics.df <- dbGetQuery(con, "SELECT DISTINCT topic_name from members_topics;")
+```
+
+
+## Use dplyr to create queries
+* tbl() lets you connect to a table  
+
+```{r}
+
+members <- tbl(con, "members")
+groups <- tbl(con, "groups")
+show_query(members)
+
+groups %>%
+  filter(group_name %like% '%basenji%') %>%
+  head(100)
+
+```
+
+### Run simple piped commands on your tbl() as you would a dataframe 
+* dplyr functions that work on database backends include select, filter, group_by, join and summarise  
+* To store results use collect()  
+```{r}
+members.by.state <- members %>%
+  select(member_id, state) %>%
+  group_by(state=='CA') %>%
+  summarise(members=n()) %>%
+  collect()
+
+members.by.state
+```
+
+### Let's see that SQL query
+```{r}
+show_query(members %>%
+             select(member_id, state) %>%
+             group_by(state=='CA') %>%
+             summarise(members=n()))
+```
+
+## Create a visualization
+#### What do other data meetups call themselves?
+
+```{r}
+options(digits=2)
+who <- groups %>%
+  filter(group_name %like% '%data%') %>%
+  select(word=who) %>%
+  collect() %>%
+  group_by(word) %>%
+  summarise(n=n()) %>%
+  mutate(freq=n/sum(n)) %>%
+  select(-n)
+  
+wordcloud2(who, size=6)
+
+```
+
+
+
+
+```{r}
+
+```
+
+
+
+### Add R data frame to SQL database as new table
+```{r}
+topics <- read.csv('topics.csv', 
+                   stringsAsFactors = FALSE)
+
+dbWriteTable(con, "topics", topics)
+
+# check for success
+dbListTables(con)
+```
+
+### Now drop the table
+```{r}
+# delete the table
+dbExecute(con, "DROP TABLE topics;")
+
+# check for success
+dbListTables(con)
+```
+
